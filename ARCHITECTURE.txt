@@ -1,0 +1,227 @@
+"""
+MINICLAW ARCHITECTURE DIAGRAM
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                        MINICLAW SYSTEM OVERVIEW                           ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          STRATEGIC LAYER                                    │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ ControlCenter (StrategicCoordinator)                                │   │
+│  │                                                                     │   │
+│  │ • Routes user messages to supervisors                              │   │
+│  │ • Monitors system health (health_check loop)                       │   │
+│  │ • Allocates resources (future: rate limiting, load balancing)      │   │
+│  │ • Coordinates between domains                                      │   │
+│  └────────┬────────────────────────────────────────────────┬──────────┘   │
+│           │                                                │               │
+│     Spawn & Register                              Spawn & Register         │
+│           │                                                │               │
+└───────────┼────────────────────────────────────────────────┼───────────────┘
+            │                                                │
+            │                                                │
+            ▼                                                ▼
+┌─────────────────────────────────────┐   ┌─────────────────────────────────┐
+│        TACTICAL LAYER               │   │        TACTICAL LAYER           │
+│  ConversationSupervisor             │   │     ToolSupervisor              │
+│  (TacticalSupervisor)               │   │  (TacticalSupervisor)           │
+├─────────────────────────────────────┤   ├─────────────────────────────────┤
+│ • Orchestrates conversation flow    │   │ • Manages tool execution        │
+│ • Spawns child execution agents     │   │ • Spawns tool agents            │
+│ • Routes to LLM                     │   │ • Load balances tool requests   │
+│ • Manages context & memory          │   │                                 │
+│ • Reports to strategic layer        │   │                                 │
+│                                     │   │                                 │
+│ Children:                           │   │ Children:                       │
+│ ┌─────────────────────────────────┐ │   │ ┌─────────────────────────────┐│
+│ │ LLMAgent                        │ │   │ │ ToolAgent                   ││
+│ │ (ExecutionAgent)                │ │   │ │ (ExecutionAgent)            ││
+│ │ • Calls Claude/GPT APIs         │ │   │ │ • Executes shell commands   ││
+│ │ • Tracks token usage            │ │   │ │ • File operations           ││
+│ │ • Reports latency               │ │   │ │ • Extensible architecture   ││
+│ └─────────────────────────────────┘ │   │ └─────────────────────────────┘│
+│ ┌─────────────────────────────────┐ │   │                                 │
+│ │ MemoryAgent                     │ │   │                                 │
+│ │ (ExecutionAgent)                │ │   │                                 │
+│ │ • Stores conversation history   │ │   │                                 │
+│ │ • Retrieves context             │ │   │                                 │
+│ │ • Manages per-conversation state│ │   │                                 │
+│ └─────────────────────────────────┘ │   │                                 │
+│ ┌─────────────────────────────────┐ │   │                                 │
+│ │ PersonaAgent                    │ │   │                                 │
+│ │ (ExecutionAgent)                │ │   │                                 │
+│ │ • Selects conversation persona  │ │   │                                 │
+│ │ • Provides system prompt        │ │   │                                 │
+│ │ • Manages conversation style    │ │   │                                 │
+│ └─────────────────────────────────┘ │   │                                 │
+└─────────────────────────────────────┘   └─────────────────────────────────┘
+
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                          MESSAGE FLOW                                      ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+User Input (CLI)
+        │
+        ▼
+   MiniClawAssistant.chat()
+        │
+        ▼
+   ControlCenter.process_user_message()
+        │
+        └──> ConversationSupervisor.handle_turn()
+                │
+                ├──> MemoryAgent.retrieve()
+                │    └──> Get last N messages from conversation
+                │
+                ├──> PersonaAgent.select_persona()
+                │    └──> Get system prompt for persona
+                │
+                ├──> LLMAgent.generate()
+                │    ├──> Call Anthropic Claude API
+                │    ├──> Track tokens & latency
+                │    └──> Return response
+                │
+                └──> MemoryAgent.store()
+                     └──> Store response in conversation history
+
+        │
+        ▼
+   Return Response to User
+
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                    MESSAGE PASSING PATTERN                                 ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+Parent (Supervisor)
+        │
+        │ send_message(AgentMessage)
+        │   {
+        │     "sender_id": "conversation-supervisor",
+        │     "action": "generate",
+        │     "payload": {
+        │       "messages": [...],
+        │       "max_tokens": 1024,
+        │       "temperature": 0.7
+        │     }
+        │   }
+        ▼
+    Agent.message_queue (asyncio.Queue)
+        │
+        │ [async loop]
+        │
+        ▼
+    Agent.on_message()
+        │
+        ▼
+    Agent.execute_action()
+        │
+        ▼
+    Agent.report_to_parent(AgentReport)
+        {
+          "agent_id": "llm-agent",
+          "action": "generate",
+          "status": "success",
+          "data": {
+            "response": "...",
+            "usage": {"input_tokens": 100, "output_tokens": 50}
+          }
+        }
+
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                         AGENT HIERARCHY                                    ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+BaseAgent
+├── StrategicCoordinator
+│   └── ControlCenter (system orchestration)
+│
+├── TacticalSupervisor
+│   ├── ConversationSupervisor (conversation orchestration)
+│   └── ToolSupervisor (tool orchestration)
+│
+└── ExecutionAgent
+    ├── LLMAgent (Claude/GPT API)
+    ├── MemoryAgent (conversation history)
+    ├── ToolAgent (shell, file operations)
+    └── PersonaAgent (conversation personas)
+    
+    [Custom agents can extend ExecutionAgent]
+
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                    TEMPORAL STRATIFICATION                                 ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+Strategic Layer:  HOURS → DAYS
+  └─ When to run health checks?
+  └─ How to allocate resources?
+  └─ What are system-wide goals?
+
+Tactical Layer:  MINUTES → HOURS
+  └─ Which agent should handle this?
+  └─ How to coordinate agents?
+  └─ What's the conversation strategy?
+
+Execution Layer:  MILLISECONDS → SECONDS
+  └─ Call the LLM NOW
+  └─ Retrieve that message NOW
+  └─ Execute this tool NOW
+
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                  SEPARATION OF CONCERNS                                    ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+Strategic Layer:  WHAT
+  ├─ What goals should we pursue?
+  ├─ What are the system-wide priorities?
+  └─ What resources should we allocate?
+
+Tactical Layer:  HOW
+  ├─ How to coordinate agents?
+  ├─ How to route messages?
+  ├─ How to handle failures?
+  └─ How to balance load?
+
+Execution Layer:  DO
+  ├─ Do call the LLM
+  ├─ Do fetch the memory
+  ├─ Do execute the tool
+  └─ Do report results
+
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                    EXTENSION POINTS                                        ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+1. New Execution Agents
+   └─ Inherit from ExecutionAgent
+   └─ Implement execute_action()
+   └─ Examples: WeatherAgent, DatabaseAgent, SlackAgent
+
+2. New Supervisors
+   └─ Inherit from TacticalSupervisor
+   └─ Implement on_directive()
+   └─ Register with ControlCenter
+
+3. New LLM Providers
+   └─ Modify LLMAgent.__init__()
+   └─ Add provider detection
+   └─ Implement API-specific calls
+
+4. Message Bus
+   └─ Replace asyncio.Queue with RabbitMQ/Redis
+   └─ Implement request/response pattern
+   └─ Add publish/subscribe
+
+5. Persistent Storage
+   └─ Replace MemoryAgent dict with database
+   └─ Add semantic search
+   └─ Implement retention policies
+"""

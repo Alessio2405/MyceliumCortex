@@ -1,0 +1,9 @@
+anthropic>=0.7.0
+openai>=1.0.0
+pydantic>=2.0.0
+aioredis==2.0.1  # optional: needed for Redis-backed bus
+httpx>=0.24.0
+# RAG System (optional)
+numpy>=1.24.0  # for vector operations
+sentence-transformers>=2.2.0  # optional: local embeddings (install only if not using API)
+chromadb>=0.3.21  # optional: production vector store
